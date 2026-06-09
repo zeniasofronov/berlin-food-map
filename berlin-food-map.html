@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Еда в Берлине</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js">
+  </script>
+
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --accent:  #e8542a;
+      --text:    #1a1a1a;
+      --muted:   #9a9a9a;
+      --bg:      #ffffff;
+      --radius:  10px;
+    }
+
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Map ──────────────────────────────────────────── */
+    #map { position: fixed; inset: 0; z-index: 1; }
+
+    /* ── Header ───────────────────────────────────────── */
+    .header {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 1001;
+      display: flex; align-items: baseline; gap: 8px;
+      padding: 11px 16px 10px;
+      background: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+    }
+    .header-title { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
+    .header-hint  { font-size: 13px; color: var(--muted); }
+
+    /* ── Setup banner (shown when keys not configured) ── */
+    .setup-banner {
+      position: fixed; top: 44px; left: 0; right: 0; z-index: 1001;
+      background: #fff8ec; border-bottom: 1px solid #ffe0b2;
+      padding: 10px 16px; font-size: 13px; color: #7a4f00;
+      display: none;
+    }
+    .setup-banner.visible { display: block; }
+    .setup-banner strong { font-weight: 700; }
+
+    /* ── Dimmer ───────────────────────────────────────── */
+    .dimmer {
+      position: fixed; inset: 0; z-index: 1002;
+      background: rgba(0, 0, 0, 0.22);
+      display: none;
+    }
+    .dimmer.on { display: block; }
+
+    /* ── Form panel ───────────────────────────────────── */
+    .panel {
+      position: fixed; bottom: 0; left: 50%; z-index: 1003;
+      transform: translateX(-50%) translateY(110%);
+      transition: transform 0.36s cubic-bezier(0.32, 0.72, 0, 1);
+      width: 100%; max-width: 520px;
+      max-height: 88vh; overflow-y: auto;
+      background: var(--bg);
+      border-radius: 20px 20px 0 0;
+      box-shadow: 0 -4px 32px rgba(0, 0, 0, 0.14);
+      padding: 0 20px 52px;
+    }
+    .panel.open { transform: translateX(-50%) translateY(0); }
+
+    .drag-handle {
+      width: 38px; height: 4px;
+      background: #ddd; border-radius: 2px;
+      margin: 13px auto 18px;
+      flex-shrink: 0;
+    }
+
+    .panel-title { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
+
+    /* ── Form fields ──────────────────────────────────── */
+    .field { margin-bottom: 12px; }
+
+    .field label {
+      display: block;
+      font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.6px;
+      color: var(--muted); margin-bottom: 6px;
+    }
+
+    .field input,
+    .field textarea {
+      width: 100%; padding: 11px 13px;
+      border: 1.5px solid #ebebeb; border-radius: var(--radius);
+      font-size: 15px; font-family: inherit; color: var(--text);
+      background: #fafafa; outline: none;
+      transition: border-color 0.18s, background 0.18s;
+      resize: none;
+      -webkit-appearance: none;
+    }
+    .field input:focus,
+    .field textarea:focus   { border-color: var(--accent); background: #fff; }
+    .field input.shake      { border-color: var(--accent); animation: shake 0.28s ease; }
+    .field textarea         { height: 84px; line-height: 1.45; }
+
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      25%       { transform: translateX(-4px); }
+      75%       { transform: translateX(4px); }
+    }
+
+    /* ── Actions ──────────────────────────────────────── */
+    .actions { display: flex; gap: 10px; margin-top: 16px; }
+
+    .btn-add {
+      flex: 1; padding: 13px;
+      background: var(--accent); color: #fff;
+      border: none; border-radius: var(--radius);
+      font-size: 15px; font-weight: 600; font-family: inherit;
+      cursor: pointer; transition: opacity 0.15s;
+    }
+    .btn-add:active   { opacity: 0.80; }
+    .btn-add:disabled { opacity: 0.50; cursor: default; }
+
+    .btn-cancel {
+      padding: 13px 18px;
+      background: #f2f2f2; color: var(--text);
+      border: none; border-radius: var(--radius);
+      font-size: 15px; font-family: inherit;
+      cursor: pointer; transition: background 0.15s;
+    }
+    .btn-cancel:active { background: #e6e6e6; }
+
+    /* ── Markers ──────────────────────────────────────── */
+    .pin {
+      width: 16px; height: 16px;
+      background: var(--accent);
+      border: 2.5px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 1px 7px rgba(0, 0, 0, 0.28);
+    }
+    .pin.ghost {
+      background: #bbb;
+      animation: pulse 1.3s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1);    opacity: 1;    }
+      50%       { transform: scale(1.3); opacity: 0.55; }
+    }
+
+    /* ── Leaflet popup overrides ──────────────────────── */
+    .leaflet-popup-content-wrapper {
+      border-radius: 14px !important;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.16) !important;
+      padding: 0 !important;
+      overflow: hidden;
+    }
+    .leaflet-popup-content   { margin: 0 !important; width: auto !important; }
+    .leaflet-popup-tip-container { margin-top: -1px; }
+
+    .pop       { padding: 13px 16px; min-width: 160px; max-width: 240px; }
+    .pop-name  { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+    .pop-desc  { font-size: 13px; color: #555; line-height: 1.42; word-break: break-word; }
+
+    /* ── Toast ────────────────────────────────────────── */
+    .toast {
+      position: fixed; bottom: 24px; left: 50%; z-index: 1004;
+      transform: translateX(-50%) translateY(56px);
+      background: rgba(18, 18, 18, 0.88);
+      color: #fff; font-size: 14px;
+      padding: 9px 18px; border-radius: 24px;
+      pointer-events: none; white-space: nowrap;
+      opacity: 0;
+      transition: transform 0.28s ease, opacity 0.28s ease;
+    }
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    /* ── Attribution nudge ────────────────────────────── */
+    .leaflet-control-attribution { font-size: 10px !important; }
+  </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<header class="header">
+  <span class="header-title">🍜 Еда в Берлине</span>
+  <span class="header-hint">Нажмите на карту, чтобы добавить место</span>
+</header>
+
+<div class="setup-banner" id="setupBanner">
+  <strong>Нужна настройка.</strong>
+  Откройте файл и замените <code>YOUR_SUPABASE_URL</code> и <code>YOUR_SUPABASE_ANON_KEY</code> на свои данные из Supabase.
+</div>
+
+<div class="dimmer" id="dimmer"></div>
+
+<div class="panel" id="panel">
+  <div class="drag-handle"></div>
+  <div class="panel-title">Новое место</div>
+
+  <div class="field">
+    <label>Название</label>
+    <input type="text" id="fName"
+           placeholder="Markthalle IX, Bonanza Coffee…"
+           autocomplete="off" autocorrect="off" />
+  </div>
+
+  <div class="field">
+    <label>О месте</label>
+    <textarea id="fDesc"
+              placeholder="кофе / еда / бар — что взять, сколько стоит, почему сюда"></textarea>
+  </div>
+
+  <div class="actions">
+    <button class="btn-cancel" id="btnCancel">Отмена</button>
+    <button class="btn-add"    id="btnAdd">Добавить</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ╔═══════════════════════════════════════════════╗
+// ║             Настройки Supabase                ║
+// ╠═══════════════════════════════════════════════╣
+const SUPABASE_URL      = 'https://smvcdgasuhdidqrwgjez.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_F2ACalvdwf97bFGT6yZ7tw_YQWJ1OHC';
+// ╚═══════════════════════════════════════════════╝
+
+// ── Check config ─────────────────────────────────────────────────────────
+const configured = !SUPABASE_URL.startsWith('YOUR_') && !SUPABASE_ANON_KEY.startsWith('YOUR_');
+if (!configured) document.getElementById('setupBanner').classList.add('visible');
+
+// ── Supabase & map init ───────────────────────────────────────────────────
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const map = L.map('map', { zoomControl: false })
+  .setView([52.507, 13.385], 13);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
+  maxZoom: 19
+}).addTo(map);
+
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+// ── App state ─────────────────────────────────────────────────────────────
+const shownIds    = new Set();
+let   pendingMark = null;
+let   pendingLL   = null;
+
+// ── DOM refs ──────────────────────────────────────────────────────────────
+const panel     = document.getElementById('panel');
+const dimmer    = document.getElementById('dimmer');
+const fName     = document.getElementById('fName');
+const fDesc     = document.getElementById('fDesc');
+const btnAdd    = document.getElementById('btnAdd');
+const btnCancel = document.getElementById('btnCancel');
+const toastEl   = document.getElementById('toast');
+
+// ── Icon factory ──────────────────────────────────────────────────────────
+const mkIcon = (ghost = false) => L.divIcon({
+  className:   '',
+  html:        `<div class="pin${ghost ? ' ghost' : ''}"></div>`,
+  iconSize:    [16, 16],
+  iconAnchor:  [8, 8],
+  popupAnchor: [0, -12]
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+const esc = s => String(s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+let toastTimer;
+function showToast(msg) {
+  clearTimeout(toastTimer);
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2700);
+}
+
+// ── Add a place marker to the map ─────────────────────────────────────────
+function addMarker(p) {
+  if (shownIds.has(p.id)) return;
+  shownIds.add(p.id);
+
+  const descHtml = p.description
+    ? `<div class="pop-desc">${esc(p.description).replace(/\n/g, '<br>')}</div>`
+    : '';
+
+  L.marker([p.lat, p.lng], { icon: mkIcon() })
+    .bindPopup(
+      `<div class="pop"><div class="pop-name">${esc(p.name)}</div>${descHtml}</div>`,
+      { maxWidth: 260, closeButton: false }
+    )
+    .addTo(map);
+}
+
+// ── Fetch all places (also used as poll) ─────────────────────────────────
+async function fetchPlaces() {
+  if (!configured) return;
+
+  const { data, error } = await db
+    .from('places')
+    .select('id, name, description, lat, lng')
+    .order('created_at');
+
+  if (error) { console.error('Supabase error:', error.message); return; }
+  (data || []).forEach(addMarker);
+}
+
+// ── Open / close form ─────────────────────────────────────────────────────
+function openForm(latlng) {
+  if (!configured) { showToast('Настройте Supabase в начале файла'); return; }
+
+  pendingLL = latlng;
+
+  if (pendingMark) pendingMark.remove();
+  pendingMark = L.marker([latlng.lat, latlng.lng], {
+    icon: mkIcon(true), zIndexOffset: 999
+  }).addTo(map);
+
+  fName.value = '';
+  fDesc.value = '';
+  fName.classList.remove('shake');
+
+  panel.classList.add('open');
+  dimmer.classList.add('on');
+
+  // Focus after slide-in animation
+  setTimeout(() => fName.focus(), 380);
+}
+
+function closeForm() {
+  panel.classList.remove('open');
+  dimmer.classList.remove('on');
+  if (pendingMark) { pendingMark.remove(); pendingMark = null; }
+  pendingLL = null;
+}
+
+// ── Event bindings ────────────────────────────────────────────────────────
+map.on('click', e => {
+  if (panel.classList.contains('open')) return;
+  openForm(e.latlng);
+});
+
+dimmer.addEventListener('click', closeForm);
+btnCancel.addEventListener('click', closeForm);
+
+fName.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); btnAdd.click(); }
+});
+
+// ── Submit ────────────────────────────────────────────────────────────────
+btnAdd.addEventListener('click', async () => {
+  const name = fName.value.trim();
+
+  if (!name) {
+    fName.classList.remove('shake');
+    // Force reflow so animation re-triggers if user clicks twice
+    void fName.offsetWidth;
+    fName.classList.add('shake');
+    fName.focus();
+    return;
+  }
+
+  if (!pendingLL) return;
+
+  btnAdd.disabled = true;
+  btnAdd.textContent = 'Сохраняю…';
+
+  const { data, error } = await db
+    .from('places')
+    .insert([{
+      name,
+      description: fDesc.value.trim(),
+      lat: pendingLL.lat,
+      lng: pendingLL.lng
+    }])
+    .select()
+    .single();
+
+  btnAdd.disabled = false;
+  btnAdd.textContent = 'Добавить';
+
+  if (error) {
+    console.error('Insert error:', error.message);
+    showToast('Не получилось сохранить 😔');
+    return;
+  }
+
+  addMarker(data);
+  closeForm();
+  showToast('Место добавлено!');
+});
+
+// ── Boot ──────────────────────────────────────────────────────────────────
+fetchPlaces();
+setInterval(fetchPlaces, 10000);
+</script>
+</body>
+</html>
